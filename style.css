@@ -1,0 +1,27 @@
+body {
+	width: 40em;
+	margin: 2em;
+	font-size: 16px;
+	line-height: 1.4em;
+}
+
+h1 {
+	padding-bottom: 0.5em;
+	font-size: 26px;
+}
+
+h2 {
+	padding-bottom: 0.5em;
+	font-size: 22px;
+}
+
+pre {
+	padding: 1em;
+	font-size: 14px;
+	margin-bottom: 0.5em;
+}
+
+table {
+	border: 1px;
+}
+

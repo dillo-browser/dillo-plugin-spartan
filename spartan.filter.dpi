@@ -1,0 +1,111 @@
+#!/bin/bash
+# Copyright (c) 2024 Rodrigo Arias Mallo
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+IFS= read -d '>' auth # Ignore auth
+IFS= read -d '>' cmd
+dir="$(dirname $(readlink -f $0))"
+dpiname="spartan.filter.dpi"
+# Set to 1 to emit debugging messages 
+debug=0
+
+function dbg() {
+  if [ "$debug" == "1" ]; then
+    >&2 echo "[${dpiname}]:" "$@"
+  fi
+}
+
+case "$cmd" in
+  "<cmd='open_url' url='"*);;
+  *) echo $cmd; exit;;
+esac
+
+url=${cmd#"<cmd='open_url' url='"}
+url=${url%"' '"}
+
+serve_error() {
+  printf "<cmd='start_send_page' url='' '>\n"
+  printf "Content-type: text/plain\r\n\r\n"
+  echo "Error: $@"
+  exit 0
+}
+
+fix_links() {
+  # Replace "=>" links with HTML links
+  sed 's_^=>[[:space:]]*\([^[:space:]]\+\)[[:space:]]\+\(.*\)$_<a href="\1">\2</a><br>_' |\
+  sed 's_^=>[[:space:]]*\([^[:space:]]\+\)[[:space:]]*$_<a href="\1">\1</a><br>_'
+}
+
+serve_page() {
+  #set -x
+  url="$1"
+  #>&2 echo url=$url
+  noproto="${url#"spartan://"}"
+  dbg "noproto=$noproto"
+  host_port=$(echo "$noproto" | sed 's@\([^/]*\).*@\1@')
+  host=$(echo "$host_port" | sed 's@\([^:]*\).*@\1@')
+  dbg "host=$host"
+  port=$(echo "$host_port" | sed 's/^[^:]*:\?//')
+  if [ -z "$port" ]; then
+    port="300"
+  fi
+  dbg "port=$port"
+  path=$(echo "$noproto" | sed 's/^[^\/]*//')
+  if [ -z "$path" ]; then
+    path="/"
+  fi
+  dbg "path=$path"
+
+  dbg "connecting to $host:$port"
+  exec 9<>"/dev/tcp/$host/$port"
+
+  if [ "$?" != "0" ]; then
+    serve_error "Cannot connect to $host:$port"
+  fi
+
+  dbg "fetching $path"
+  printf "%s %s 0\n\r" "$host" "$path" >&9
+
+  IFS=" \n\r" read -r -u 9 retcode arg
+
+  if [ "$retcode" == "3" ]; then
+    printf "<cmd='start_send_page' '>\n"
+    printf "Content-type: text/html\r\n\r\n"
+    echo "<a href='${arg}'>Redirect</a>"
+  elif [ "$retcode" != "2" ]; then
+    serve_error "$arg"
+  else
+
+    dbg "arg=$arg"
+    ftype=$(echo $arg | cut -d';' -f1 | tr -d '\r')
+    dbg "ftype=$ftype"
+
+    printf "<cmd='start_send_page' url='' '>\n"
+
+    if [ "$ftype" == "text/gemini" ]; then
+      printf "Content-type: text/html\r\n\r\n"
+      echo "<!DOCTYPE html>"
+      echo "<html>"
+      echo "<head>"
+      echo "<title>${noproto}</title>"
+      echo "<style>"
+      cat "$dir/style.css"
+      echo "</style>"
+      echo "</head>"
+      echo "<body>"
+      <&9 cat | tr -d '\r' | fix_links | markdown -f +fencedcode
+      echo "</body>"
+      echo "</html>"
+    else
+      printf "Content-type: ${ftype}\r\n\r\n"
+      <&9 cat
+    fi
+  fi
+
+  exec 9<&-
+}
+
+case "$url" in
+  spartan:*) serve_page "$url";;
+  *) serve_error "unknown URL: ${url}";;
+esac
